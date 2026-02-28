@@ -1,47 +1,116 @@
 import sys
+import os
+import json
 import ollama
 import config
+
+# 获取当前脚本所在目录
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+RULES_FILE = os.path.join(BASE_DIR, 'rules_50etf.json')
+
+def load_rules():
+    """加载规则库文件"""
+    try:
+        with open(RULES_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error loading rules from {RULES_FILE}: {e}")
+        return None
+
+# 加载规则库
+RULES_DATA = load_rules()
 
 def normalize_50etf_text(user_input):
     """
     调用本地 Ollama 模型规范化用户输入。
-    仅保留 50ETF 相关核心信息，剔除无关内容。
+    基于 rules_50etf.json 规则库进行解析和转换。
+    输出结构化的规则约束信息，而非直接的SQL。
     
     参数:
         user_input (str): 用户输入的原始文本
         
     返回:
-        str: 规范化后的文本 或 "无有效50ETF相关信息"
+        str: 结构化的约束文本 或 "无有效50ETF相关信息"
     """
     
     # 检查输入是否为空
     if not user_input or not user_input.strip():
         return None
+        
+    if not RULES_DATA:
+        return "错误：规则库加载失败"
 
-    # 定义系统提示词，严格约束模型行为
-    system_prompt = """
-    你是一个金融文本处理助手，专门负责提取“上证50ETF”相关的核心信息。
+    # 提取规则库的关键部分构建提示词
+    basic_rules = RULES_DATA.get("基础规则", {})
+    advanced_rules = RULES_DATA.get("进阶规则", {})
     
-    请严格遵守以下规则处理用户输入：
-    1. **保留内容**：仅保留与50ETF（上证50交易型开放式指数基金）及其期权相关的信息，包括价格、走势、买卖操作、持仓、费率、成分股、套利、申赎、时间/数值等。
-    2. **剔除内容**：
-       - 剔除所有闲聊（如“你好”、“在吗”）。
-       - 剔除无关金融产品（如“股票”、“期货”、“沪深300ETF”等）。
-       - 剔除情绪化表达（如“气死了”、“求大神”）。
-       - 剔除无意义语气词（如“啊啊啊”、“嗯嗯”）。
-    3. **输出格式**：
-       - 直接输出规范化后的核心文本，不要包含任何解释、前缀或寒暄。
-       - 如果输入中不包含任何50ETF相关有效信息，请直接返回“无有效50ETF相关信息”。
-       
-    示例：
-    输入：“你好，请问50ETF期权现在的价格是多少啊？我都急死了”
-    输出：“50ETF期权现在的价格是多少”
+    invalid_words = basic_rules.get("无效词过滤", [])
+    # target_map = basic_rules.get("标的映射", {})  # 已移除标的映射
+    option_type_map = basic_rules.get("期权类型映射", {})
+    field_map = basic_rules.get("指标字段映射", {})
+    time_map = basic_rules.get("时间条件映射", {})
+    numeric_template = basic_rules.get("数值条件模板", {})
+    sort_map = basic_rules.get("排序规则映射", {})
+    fuzzy_map = basic_rules.get("模糊查询映射", {})
+    exception_thresholds = advanced_rules.get("异常值阈值", {})
     
-    输入：“沪深300最近怎么样？”
-    输出：“无有效50ETF相关信息”
+    # 构建动态系统提示词
+    system_prompt = f"""
+    你是一个金融领域意图识别与规则匹配引擎，处于“智能问数系统”的第一阶段。
+    你的核心任务是：根据【规则库】对用户输入进行解析，提取硬性业务约束，**绝对不要生成完整的SQL语句**。
     
-    输入：“明天50ETF会涨吗”
-    输出：“明天50ETF会涨吗”
+    注意：
+    1. 本系统仅针对“50ETF”期权数据，无需输出任何关于标的（如50ETF）的约束，默认所有查询都是针对50ETF。
+    2. **纠错机制**：如果你发现用户输入中有明显的错别字或模糊表达（如“认够”->“认购”，“成交亮”->“成交量”），必须进行自动纠错，并在输出中显式说明。
+    3. **数值条件纠错**：如果数值条件的字段名有错别字（如“成交亮”），必须在输出中注明纠错过程。
+
+    请严格参考以下规则库数据：
+    【1. 预处理规则】
+    - 无效词库：{json.dumps(invalid_words, ensure_ascii=False)}
+    
+    【2. 核心映射规则】
+    - 期权类型：{json.dumps(option_type_map, ensure_ascii=False)}
+    - 指标字段：{json.dumps(field_map, ensure_ascii=False)}
+    - 时间条件：{json.dumps(time_map, ensure_ascii=False)}
+    - 排序规则：{json.dumps(sort_map, ensure_ascii=False)}
+    - 模糊查询：{json.dumps(fuzzy_map, ensure_ascii=False)}
+    - 异常值阈值：{json.dumps(exception_thresholds, ensure_ascii=False)}
+    - 数值条件模板：{json.dumps(numeric_template, ensure_ascii=False)}
+
+    【3. 输出格式要求】
+    请严格按照以下格式输出（仅输出内容，不要markdown代码块）：
+    
+    【规则匹配结果】
+    1. 无效词过滤：去掉“<识别到的无效词>”，核心需求为“<清洗后的意图>”；
+    2. 期权类型约束：<描述类型限制，如果有纠错，请注明：经大模型语义纠错，“<原词>”匹配规则库“<标准词>”，需过滤 contract_name LIKE '%...%'>；
+    3. <具体条件约束>：<描述时间/数值/排序/模糊查询的具体规则，如果有纠错，请注明：经大模型语义纠错，“<原词>”匹配规则库“<标准词>”，需...>；
+    4. 异常值约束：<根据涉及的字段，引用异常值阈值规则，如：持仓量必须>0>；
+    5. 字段约束：仅能使用规则库指定的 <列出涉及的数据库字段英文名> 等字段。
+
+    【示例】
+    用户输入：“帮我找一下持仓量最大的认沽期权”
+    输出：
+    【规则匹配结果】
+    1. 无效词过滤：去掉“帮我找一下”，核心需求为“持仓量最大的认沽期权”；
+    2. 期权类型约束：“认沽”匹配规则库，需过滤 contract_name LIKE '%认沽%'；
+    3. 排序约束：“持仓量最大”匹配规则，需按 position_volume 降序排列且仅取1条（ORDER BY position_volume DESC LIMIT 1）；
+    4. 异常值约束：持仓量上限为1000000000，且通常需>0；
+    5. 字段约束：仅能使用规则库指定的 position_volume, contract_name, etf_type 等字段。
+
+    用户输入：“帮我查查认够期权，成交亮大于100”
+    输出：
+    【规则匹配结果】
+    1. 无效词过滤：去掉“帮我查查”，核心需求为“认够期权，成交亮大于100”；
+    2. 期权类型约束：经大模型语义纠错，“认够”匹配规则库“认购”，需过滤 contract_name LIKE '%认购%'；
+    3. 数值条件约束：经大模型语义纠错，“成交亮”匹配规则库“成交量”，需 volume > 100；
+    4. 异常值约束：成交量上限为1000000000，且通常需>0；
+    5. 字段约束：仅能使用规则库指定的 contract_name, volume, etf_type 等字段。
+
+    用户输入：“今天天气真好”
+    输出：
+    【规则匹配结果】
+    1. 无效词过滤：全文均为无效内容；
+    2. 结果：无有效50ETF相关信息。
     """
 
     try:
@@ -73,10 +142,16 @@ def normalize_50etf_text(user_input):
 
 def main():
     """主程序循环"""
-    print("="*50)
-    print(f"50ETF 文本规范化工具 (基于本地 Ollama {config.OLLAMA_MODEL})")
+    if not RULES_DATA:
+        print("警告：规则库加载失败，请检查 rules_50etf.json 文件是否存在。")
+        return
+
+    print("="*60)
+    print(f"50ETF 智能解析工具 (基于本地 Ollama {config.OLLAMA_MODEL} + 动态规则库)")
+    print(f"规则库版本: {RULES_DATA.get('元数据', {}).get('schema_version', 'Unknown')}")
+    print("模式: 规则匹配与约束提取 (Step 1)")
     print("输入 'quit' 或 'exit' 退出程序")
-    print("="*50)
+    print("="*60)
     
     while True:
         try:
@@ -91,14 +166,14 @@ def main():
             if not user_text:
                 continue
                 
-            print("正在处理...", end="\r")
+            print("正在解析...", end="\r")
             
             # 调用处理函数
             result = normalize_50etf_text(user_text)
             
             # 输出结果
             if result:
-                print(f"规范化结果: {result}")
+                print(f"\n{result}")
                 
         except KeyboardInterrupt:
             print("\n程序已强制退出。")
