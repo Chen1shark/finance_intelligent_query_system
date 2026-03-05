@@ -1,5 +1,5 @@
 from openai import OpenAI
-import local_llm_config as llm_config
+import config
 
 
 def build_sql_prompt(user_input, normalized_text, vector_result):
@@ -52,15 +52,15 @@ def generate_sql(user_input, normalized_text, vector_result=None, model=None):
     if vector_result is None:
         vector_result = ""
     prompt = build_sql_prompt(user_input, normalized_text, vector_result)
-    if not llm_config.API_KEY:
-        raise ValueError("API_KEY 为空，请在 local_llm_config.py 中配置")
+    if not config.API_KEY:
+        raise ValueError("API_KEY 为空，请在 config.py 中配置")
     client = OpenAI(
-        api_key=llm_config.API_KEY,
-        base_url=llm_config.BASE_URL,
-        default_headers=getattr(llm_config, "EXTRA_HEADERS", None)
+        api_key=config.API_KEY,
+        base_url=config.BASE_URL,
+        default_headers=getattr(config, "EXTRA_HEADERS", None)
     )
     response = client.chat.completions.create(
-        model=model or llm_config.MODEL_NAME,
+        model=model or config.MODEL_NAME,
         messages=[
             {"role": "system", "content": "你是一个MySQL SQL生成器，只输出SQL语句本身。"},
             {"role": "user", "content": prompt},

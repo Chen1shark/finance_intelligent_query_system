@@ -5,7 +5,7 @@ import requests
 import json
 import pymysql
 from fastapi import HTTPException
-import local_llm_config as config
+import config
 
 # 全局会话对象，复用连接和Cookie
 SESSION = requests.Session()

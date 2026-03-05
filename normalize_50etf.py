@@ -1,7 +1,7 @@
 import os
 import json
 from openai import OpenAI
-import local_llm_config as llm_config
+import config
 
 # 获取当前脚本所在目录
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -122,15 +122,15 @@ def normalize_50etf_text(user_input):
     """
 
     try:
-        if not llm_config.API_KEY:
+        if not config.API_KEY:
             raise ValueError("API_KEY 为空，请在 local_llm_config.py 中配置")
         client = OpenAI(
-            api_key=llm_config.API_KEY,
-            base_url=llm_config.BASE_URL,
-            default_headers=getattr(llm_config, "EXTRA_HEADERS", None)
+            api_key=config.API_KEY,
+            base_url=config.BASE_URL,
+            default_headers=getattr(config, "EXTRA_HEADERS", None)
         )
         response = client.chat.completions.create(
-            model=llm_config.MODEL_NAME,
+            model=config.MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_input},
@@ -225,7 +225,7 @@ def main():
         return
 
     print("="*60)
-    print(f"50ETF 智能解析工具 (模型：{llm_config.MODEL_NAME} + 动态规则库)")
+    print(f"50ETF 智能解析工具 (模型：{config.MODEL_NAME} + 动态规则库)")
     print(f"规则库版本: {RULES_DATA.get('元数据', {}).get('schema_version', 'Unknown')}")
     print("模式: 规则匹配与约束提取 (Step 1)")
     print("输入 'quit' 或 'exit' 退出程序")

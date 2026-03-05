@@ -3,12 +3,12 @@ import json
 import numpy as np
 import faiss
 from openai import OpenAI
-import local_llm_config as llm_config
+import config
 from normalize_50etf import extract_core_need
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VECTOR_STORE_FILE = os.path.join(BASE_DIR, "vector_store.json")
-EMBED_MODEL = llm_config.EMBED_MODEL
+EMBED_MODEL = config.EMBED_MODEL
 _CACHED_ITEMS = None
 _CACHED_VECTORS = None
 
@@ -53,12 +53,12 @@ def embed_text(text):
     返回:
         np.ndarray: 向量化后的浮点向量。
     """
-    if not llm_config.API_KEY:
+    if not config.API_KEY:
         raise ValueError("API_KEY 为空，请在 local_llm_config.py 中配置")
     client = OpenAI(
-        api_key=llm_config.API_KEY,
-        base_url=llm_config.BASE_URL,
-        default_headers=getattr(llm_config, "EXTRA_HEADERS", None)
+        api_key=config.API_KEY,
+        base_url=config.BASE_URL,
+        default_headers=getattr(config, "EXTRA_HEADERS", None)
     )
     response = client.embeddings.create(
         model=EMBED_MODEL,

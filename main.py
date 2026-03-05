@@ -5,7 +5,7 @@ import uvicorn
 import pymysql
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import local_llm_config as config
+import config
 from crawler import fetch_option_data, save_data_to_db
 from normalize_50etf import normalize_50etf_text, extract_core_need_from_text, rule_filter_core_need
 from faiss_matcher import rebuild_vector_store_embeddings, match_user_query
