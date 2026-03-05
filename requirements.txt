@@ -2,6 +2,6 @@ fastapi
 uvicorn
 requests
 pymysql
-ollama
 numpy
 faiss-cpu
+openai

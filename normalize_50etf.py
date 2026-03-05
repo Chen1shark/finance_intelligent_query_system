@@ -1,8 +1,7 @@
-import sys
 import os
 import json
-import ollama
-import config
+from openai import OpenAI
+import local_llm_config as llm_config
 
 # 获取当前脚本所在目录
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -22,7 +21,7 @@ RULES_DATA = load_rules()
 
 def normalize_50etf_text(user_input):
     """
-    调用本地 Ollama 模型规范化用户输入。
+    调用 OpenAI 兼容接口规范化用户输入。
     基于 rules_50etf.json 规则库进行解析和转换。
     输出结构化的规则约束信息，而非直接的SQL。
     
@@ -60,10 +59,11 @@ def normalize_50etf_text(user_input):
     你的核心任务是：根据【规则库】对用户输入进行解析，提取硬性业务约束，**绝对不要生成完整的SQL语句**。
     
     注意：
-    1. 本系统仅针对“50ETF”期权数据，无需输出任何关于标的（如50ETF）的约束，默认所有查询都是针对50ETF。
+    1. 本系统仅针对单一标的期权数据，无需输出任何关于标的或 etf_type 的约束，默认所有查询都是同一标的。
     2. **纠错机制**：如果你发现用户输入中有明显的错别字或模糊表达（如“认够”->“认购”，“成交亮”->“成交量”），必须进行自动纠错，并在输出中显式说明。
     3. **数值条件纠错**：如果数值条件的字段名有错别字（如“成交亮”），必须在输出中注明纠错过程。
-    4. **关键词替换**：核心需求（纠错后）中的关键词必须使用规则库的标准词进行替换（例如“看涨”->“认购”，“买权”->“认购”，“涨跌幅”/“涨幅”统一为“涨跌幅”，“量能”统一为“成交量”，“末日论”统一为“末日轮”）。
+    4. **关键词替换**：核心需求（纠错后）中的关键词必须使用规则库的标准词进行替换（例如“看涨”->“购”，“买权”->“购”，“涨跌幅”/“涨幅”统一为“涨跌幅”，“量能”统一为“成交量”，“末日论”统一为“末日轮”）。
+    5. **禁止虚空构造**：核心需求（纠错后）只能由用户输入或规则匹配约束中已有的词汇构成，不允许新增用户未提及也未被规则映射出的指标或条件词汇。
 
     请严格参考以下规则库数据：
     【1. 预处理规则】
@@ -82,67 +82,64 @@ def normalize_50etf_text(user_input):
     请严格按照以下格式输出（仅输出内容，不要markdown代码块）：
     
     【核心需求（纠错后）】
-    <将纠错后的核心意图文本，单独输出为一行，并将同义词替换为规则库标准词，例如：“本周到期的认购期权，涨跌幅最高，成交量>80000”>
+    <将纠错后的核心意图文本，单独输出为一行，并将同义词替换为规则库标准词，例如：“本周到期的购期权，涨跌幅最高，成交量>80000”>
     
     【规则匹配结果】
     1. 无效词过滤：去掉“<识别到的无效词>”，核心需求（纠错后）为“<清洗并纠错后的意图>”；
     2. 期权类型约束：<描述类型限制，如果有纠错，请注明：经大模型语义纠错，“<原词>”匹配规则库“<标准词>”，需过滤 contract_name LIKE '%...%'>；
     3. <具体条件约束>：<描述时间/数值/排序/模糊查询的具体规则，如果有纠错，请注明：经大模型语义纠错，“<原词>”匹配规则库“<标准词>”，需...>；
     4. 异常值约束：<根据涉及的字段，引用异常值阈值规则，如：持仓量必须>0>；
-    5. 字段约束：仅能使用规则库指定的 <列出涉及的数据库字段英文名> 等字段。
+    5. 字段约束：<列出涉及的数据库字段英文名> 等字段（不要包含 etf_type）。
 
     【示例】
-    用户输入：“帮我找一下持仓量最大的认沽期权”
+    用户输入：“帮我找一下持仓量最大的沽期权”
     输出：
     【核心需求（纠错后）】
-    持仓量最大的认沽期权
+    持仓量最大的沽期权
     【规则匹配结果】
-    1. 无效词过滤：去掉“帮我找一下”，核心需求（纠错后）为“持仓量最大的认沽期权”；
-    2. 期权类型约束：“认沽”匹配规则库，需过滤 contract_name LIKE '%认沽%'；
+    1. 无效词过滤：去掉“帮我找一下”，核心需求（纠错后）为“持仓量最大的沽期权”；
+    2. 期权类型约束：“沽”匹配规则库，需过滤 contract_name LIKE '%沽%'；
     3. 排序约束：“持仓量最大”匹配规则，需按 position_volume 降序排列且仅取1条（ORDER BY position_volume DESC LIMIT 1）；
     4. 异常值约束：持仓量上限为1000000000，且通常需>0；
-    5. 字段约束：仅能使用规则库指定的 position_volume, contract_name, etf_type 等字段。
+    5. 字段约束：position_volume, contract_name 等字段。
 
-    用户输入：“帮我查查认够期权，成交亮大于100”
+    用户输入：“帮我查查购期权，成交亮大于100”
     输出：
     【核心需求（纠错后）】
-    认购期权，成交量大于100
+    购期权，成交量大于100
     【规则匹配结果】
-    1. 无效词过滤：去掉“帮我查查”，核心需求（纠错后）为“认购期权，成交量大于100”；
-    2. 期权类型约束：经大模型语义纠错，“认够”匹配规则库“认购”，需过滤 contract_name LIKE '%认购%'；
+    1. 无效词过滤：去掉“帮我查查”，核心需求（纠错后）为“购期权，成交量大于100”；
+    2. 期权类型约束：经大模型语义纠错，“认够”匹配规则库“购”，需过滤 contract_name LIKE '%购%'；
     3. 数值条件约束：经大模型语义纠错，“成交亮”匹配规则库“成交量”，需 volume > 100；
     4. 异常值约束：成交量上限为1000000000，且通常需>0；
-    5. 字段约束：仅能使用规则库指定的 contract_name, volume, etf_type 等字段。
+    5. 字段约束：contract_name, volume 等字段。
 
     用户输入：“今天天气真好”
     输出：
     【规则匹配结果】
     1. 无效词过滤：全文均为无效内容；
-    2. 结果：无有效50ETF相关信息。
+    2. 结果：无有效相关信息。
     """
 
     try:
-        # 调用 Ollama 接口
-        response = ollama.chat(
-            model=config.OLLAMA_MODEL,
-            messages=[
-                {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': user_input},
-            ],
-            options={
-                'temperature': 0.1,  # 低温度保证结果稳定
-            },
-            stream=False  # 关闭流式输出，一次性返回
+        if not llm_config.API_KEY:
+            raise ValueError("API_KEY 为空，请在 local_llm_config.py 中配置")
+        client = OpenAI(
+            api_key=llm_config.API_KEY,
+            base_url=llm_config.BASE_URL,
+            default_headers=getattr(llm_config, "EXTRA_HEADERS", None)
         )
-        
-        # 获取并返回结果
-        if 'message' in response and 'content' in response['message']:
-             return response['message']['content'].strip()
+        response = client.chat.completions.create(
+            model=llm_config.MODEL_NAME,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ],
+            temperature=0.1,
+        )
+        if response.choices and response.choices[0].message and response.choices[0].message.content:
+            return response.choices[0].message.content.strip()
         return "模型未返回有效内容"
-
-    except ollama.ResponseError as e:
-        print(f"\n错误: 模型调用失败 - {e.error}")
-        return None
     except Exception as e:
         # 捕获连接错误（如服务未启动）或其他异常
         print(f"\n错误: 发生异常 - {str(e)}")
@@ -228,7 +225,7 @@ def main():
         return
 
     print("="*60)
-    print(f"50ETF 智能解析工具 (基于本地 Ollama {config.OLLAMA_MODEL} + 动态规则库)")
+    print(f"50ETF 智能解析工具 (模型：{llm_config.MODEL_NAME} + 动态规则库)")
     print(f"规则库版本: {RULES_DATA.get('元数据', {}).get('schema_version', 'Unknown')}")
     print("模式: 规则匹配与约束提取 (Step 1)")
     print("输入 'quit' 或 'exit' 退出程序")

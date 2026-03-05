@@ -2,12 +2,13 @@ import os
 import json
 import numpy as np
 import faiss
-import ollama
+from openai import OpenAI
+import local_llm_config as llm_config
 from normalize_50etf import extract_core_need
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VECTOR_STORE_FILE = os.path.join(BASE_DIR, "vector_store.json")
-EMBED_MODEL = "mxbai-embed-large"
+EMBED_MODEL = llm_config.EMBED_MODEL
 _CACHED_ITEMS = None
 _CACHED_VECTORS = None
 
@@ -46,19 +47,26 @@ def save_vector_store(data):
 
 def embed_text(text):
     """
-    调用Ollama生成文本向量。
+    调用阿里云OpenAI兼容接口生成文本向量。
     参数:
         text (str): 待向量化的文本。
     返回:
         np.ndarray: 向量化后的浮点向量。
     """
-    response = ollama.embeddings(model=EMBED_MODEL, prompt=text)
-    embedding = response.get("embedding")
-    if embedding is None and response.get("embeddings"):
-        embedding = response["embeddings"][0]
-    if embedding is None:
-        raise ValueError("Ollama 未返回 embedding")
-    return np.array(embedding, dtype="float32")
+    if not llm_config.API_KEY:
+        raise ValueError("API_KEY 为空，请在 local_llm_config.py 中配置")
+    client = OpenAI(
+        api_key=llm_config.API_KEY,
+        base_url=llm_config.BASE_URL,
+        default_headers=getattr(llm_config, "EXTRA_HEADERS", None)
+    )
+    response = client.embeddings.create(
+        model=EMBED_MODEL,
+        input=text
+    )
+    if response.data and response.data[0].embedding:
+        return np.array(response.data[0].embedding, dtype="float32")
+    raise ValueError("未返回 embedding")
 
 def normalize_vectors(vectors):
     """

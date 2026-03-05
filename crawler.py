@@ -5,7 +5,7 @@ import requests
 import json
 import pymysql
 from fastapi import HTTPException
-import config
+import local_llm_config as config
 
 # 全局会话对象，复用连接和Cookie
 SESSION = requests.Session()
@@ -31,13 +31,7 @@ def safe_int(val):
 def get_db_connection():
     """创建并返回MySQL数据库连接"""
     try:
-        connection = pymysql.connect(
-            host=config.DB_HOST,
-            user=config.DB_USER,
-            password=config.DB_PASSWORD,
-            database=config.DB_NAME,
-            charset='utf8mb4'
-        )
+        connection = pymysql.connect(**config.DB_CONFIG)
         return connection
     except pymysql.MySQLError as e:
         print(f"数据库连接失败: {e}")

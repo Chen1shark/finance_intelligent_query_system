@@ -2,12 +2,14 @@
 # 服务运行入口
 # ==============================================================================
 import uvicorn
+import pymysql
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import config
+import local_llm_config as config
 from crawler import fetch_option_data, save_data_to_db
 from normalize_50etf import normalize_50etf_text, extract_core_need_from_text, rule_filter_core_need
 from faiss_matcher import rebuild_vector_store_embeddings, match_user_query
+from sql_generator import generate_sql
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -24,6 +26,24 @@ def rebuild_embeddings_on_startup():
 class NormalizeRequest(BaseModel):
     """规范化请求体结构。"""
     text: str
+
+def run_query(sql):
+    if not sql or not sql.strip():
+        raise HTTPException(status_code=400, detail="SQL不能为空")
+    sql_text = sql.strip()
+    if not sql_text.lower().startswith("select"):
+        raise HTTPException(status_code=400, detail="仅支持SELECT查询")
+    connection = None
+    try:
+        connection = pymysql.connect(**config.DB_CONFIG)
+        with connection.cursor() as cursor:
+            cursor.execute(sql_text)
+            return cursor.fetchall()
+    except pymysql.MySQLError as e:
+        raise HTTPException(status_code=500, detail=f"数据库操作失败: {str(e)}")
+    finally:
+        if connection:
+            connection.close()
 
 # 注册API路由
 @app.get(f"{config.API_PREFIX}/crawl_50etf", summary="抓取并存储50ETF期权数据")
@@ -57,9 +77,9 @@ def crawl_50etf_data():
 @app.post(f"{config.API_PREFIX}/normalize", summary="规范化50ETF查询文本")
 def normalize_text(request: NormalizeRequest):
     """
-    使用本地Ollama模型规范化用户输入文本：
+    使用Qwen3.5-Plus规范化用户输入文本：
     1. 接收用户输入的自然语言文本
-    2. 调用qwen7b模型提取50ETF核心信息
+    2. 调用Qwen3.5-Plus提取核心信息
     3. 返回规范化后的结果
     """
     if not request.text or not request.text.strip():
@@ -70,7 +90,7 @@ def normalize_text(request: NormalizeRequest):
         result = normalize_50etf_text(request.text)
         
         if result is None:
-            raise HTTPException(status_code=500, detail="模型调用失败，请检查Ollama服务状态")
+            raise HTTPException(status_code=500, detail="模型调用失败，请检查模型配置")
             
         return {
             "code": 200,
@@ -93,7 +113,7 @@ def extract_core(request: NormalizeRequest):
     try:
         result = normalize_50etf_text(request.text)
         if result is None:
-            raise HTTPException(status_code=500, detail="模型调用失败，请检查Ollama服务状态")
+            raise HTTPException(status_code=500, detail="模型调用失败，请检查模型配置")
         core_content = extract_core_need_from_text(result)
         core_content = rule_filter_core_need(core_content)
         return {
@@ -114,7 +134,7 @@ def match_template(request: NormalizeRequest):
     try:
         normalized_text = normalize_50etf_text(request.text)
         if normalized_text is None:
-            raise HTTPException(status_code=500, detail="模型调用失败，请检查Ollama服务状态")
+            raise HTTPException(status_code=500, detail="模型调用失败，请检查模型配置")
         core_content = extract_core_need_from_text(normalized_text)
         core_content = rule_filter_core_need(core_content)
         results = match_user_query(request.text, top_k=1, core_need=core_content)
@@ -130,6 +150,40 @@ def match_template(request: NormalizeRequest):
                 "score": best.get("score"),
                 "question": best.get("question"),
                 "sql": best.get("sql")
+            }
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post(f"{config.API_PREFIX}/query", summary="生成SQL并查询数据库")
+def query_data(request: NormalizeRequest):
+    if not request.text or not request.text.strip():
+        raise HTTPException(status_code=400, detail="输入文本不能为空")
+    try:
+        normalized_text = normalize_50etf_text(request.text)
+        if normalized_text is None:
+            raise HTTPException(status_code=500, detail="模型调用失败，请检查模型配置")
+        core_content = extract_core_need_from_text(normalized_text)
+        core_content = rule_filter_core_need(core_content)
+        results = match_user_query(request.text, top_k=1, core_need=core_content)
+        vector_sql = ""
+        if results:
+            vector_sql = results[0].get("sql") or ""
+        sql = generate_sql(request.text, normalized_text, vector_sql)
+        if not sql:
+            raise HTTPException(status_code=500, detail="SQL生成失败")
+        data = run_query(sql)
+        return {
+            "code": 200,
+            "msg": "处理成功",
+            "data": {
+                "normalized_text": normalized_text,
+                "core_need": core_content,
+                "sql": sql,
+                "rows": data,
+                "total": len(data)
             }
         }
     except HTTPException as e:
