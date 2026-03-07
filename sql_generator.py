@@ -65,7 +65,8 @@ def generate_sql(user_input, normalized_text, vector_result=None, model=None):
             {"role": "system", "content": "你是一个MySQL SQL生成器，只输出SQL语句本身。"},
             {"role": "user", "content": prompt},
         ],
-        temperature=0.1,
+        temperature=config.TEMPERATURE,
+        thinkin_enable=config.THINKIN_ENABLE,
     )
     if response.choices and response.choices[0].message and response.choices[0].message.content:
         return clean_sql_output(response.choices[0].message.content)

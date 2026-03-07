@@ -135,7 +135,8 @@ def normalize_50etf_text(user_input):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_input},
             ],
-            temperature=0.1,
+            temperature=config.TEMPERATURE,
+            thinkin_enable=config.THINKIN_ENABLE,
         )
         if response.choices and response.choices[0].message and response.choices[0].message.content:
             return response.choices[0].message.content.strip()
