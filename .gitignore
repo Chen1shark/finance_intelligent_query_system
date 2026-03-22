@@ -1,2 +1,24 @@
+# Python
 __pycache__/
-config.py
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# Backend - sensitive files
+back_end/.env
+back_end/config.py
+
+# Frontend (will be added later)
+front_end/node_modules/
+front_end/dist/
+front_end/.env.local
+
+# IDE
+.vscode/
+.idea/
+

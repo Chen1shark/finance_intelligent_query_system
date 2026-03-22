@@ -5,3 +5,6 @@ pymysql
 numpy
 faiss-cpu
 openai
+python-dotenv
+pydantic-settings
+pydantic
