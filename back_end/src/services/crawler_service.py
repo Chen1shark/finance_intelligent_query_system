@@ -1,8 +1,11 @@
+import json
+import os
+import random
 import re
 import time
-import random
-import json
-import requests
+import urllib.parse
+from datetime import datetime
+
 import pymysql
 from fastapi import HTTPException
 
@@ -10,132 +13,156 @@ from src.core.config import get_settings
 from src.core.database import get_db_connection
 from src.utils.data_parser import safe_decimal, safe_int
 
-# 全局会话对象，复用连接和Cookie
-SESSION = requests.Session()
+# 禁用代理
+for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+    os.environ.pop(k, None)
+os.environ["no_proxy"] = "*"
+os.environ["NO_PROXY"] = "*"
 
 
 class CrawlerService:
-
     @staticmethod
     def fetch_option_data():
-        """爬取50ETF期权数据并返回结构化列表"""
+        """Fetch 50ETF option data from Eastmoney and return structured rows."""
+        from DrissionPage import ChromiumPage, ChromiumOptions
+        
         settings = get_settings()
         all_processed_list = []
         page = 1
         max_pages = 10
+        
+        # 启动无头浏览器（复用实例）
+        co = ChromiumOptions()
+        co.headless(True)  # 无头模式
+        co.no_imgs(True)   # 不加载图片，加快速度
+        browser = ChromiumPage(addr_or_opts=co)
+        
+        try:
+            # 监听目标域名
+            domain = settings.target_url.split('/')[2]
+            browser.listen.start(domain)
+            
+            while page <= max_pages:
+                data = None
+                for attempt in range(3):
+                    try:
+                        # 每次请求都动态生成时间戳和callback
+                        timestamp = str(int(time.time() * 1000))
+                        callback = f"jQuery{random.randint(1000000000, 9999999999)}_{timestamp}"
+                        params = {
+                            "np": "1",
+                            "fltt": "1",
+                            "invt": "2",
+                            "cb": callback,
+                            "fs": "m:10+c:510050",
+                            "fields": "f12,f14,f2,f4,f3,f5,f6,f108,f161,f162,f163,f28,f17",
+                            "fid": "f3",
+                            "pn": str(page),
+                            "pz": "50",
+                            "po": "1",
+                            "dect": "1",
+                            "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+                            "wbp2u": "|0|0|0|web",
+                            "_": timestamp,
+                        }
+                        
+                        delay = random.uniform(2.0, 4.0)
+                        if attempt > 0:
+                            delay += random.uniform(2.0, 4.0)
+                        print(f"抓取第 {page} 页，第 {attempt + 1} 次请求，延迟 {delay:.2f} 秒")
+                        time.sleep(delay)
 
-        while page <= max_pages:
-            # 生成动态时间戳和回调函数名
-            timestamp = str(int(time.time() * 1000))
-            callback = f"jQuery{random.randint(1000000000, 9999999999)}_{timestamp}"
+                        # 构建完整URL
+                        query_string = urllib.parse.urlencode(params)
+                        full_url = f"{settings.target_url}?{query_string}"
+                        
+                        # 清空监听队列，避免捕获之前的响应
+                        try:
+                            while browser.listen.wait(timeout=0.1):
+                                pass
+                        except:
+                            pass
+                        
+                        # 访问URL
+                        browser.get(full_url)
+                        
+                        # 等待响应（通过callback确认是当前请求的响应）
+                        content = None
+                        for _ in range(10):
+                            pkt = browser.listen.wait()
+                            if pkt and pkt.response and pkt.response.body:
+                                body = pkt.response.body
+                                # 处理bytes类型
+                                if isinstance(body, bytes):
+                                    try:
+                                        content = body.decode('utf-8')
+                                    except UnicodeDecodeError:
+                                        import gzip
+                                        try:
+                                            content = gzip.decompress(body).decode('utf-8')
+                                        except:
+                                            content = body.decode('utf-8', errors='ignore')
+                                else:
+                                    content = body
+                                # 确认是当前请求的响应（通过callback匹配）
+                                if content and callback in content:
+                                    break
+                                content = None
+                            time.sleep(0.5)
+                        
+                        if not content:
+                            raise ConnectionError("未获取到响应数据")
 
-            # 构造请求参数
-            params = {
-                "np": "1",
-                "fltt": "1",
-                "invt": "2",
-                "cb": callback,
-                "fs": "m:10+c:510050",
-                "fields": "f12,f14,f2,f4,f3,f5,f6,f108,f161,f162,f163,f28,f17",
-                "fid": "f3",
-                "pn": str(page),
-                "pz": "50",
-                "po": "1",
-                "dect": "1",
-                "ut": "fa5fd1943c7b386f172d6893dbfba10b",
-                "_": timestamp
-            }
+                        match = re.search(r"^jQuery\d+_\d+\((.*)\);?$", content)
+                        if not match:
+                            raise ValueError("返回结果不是有效的 JSONP 数据")
 
-            max_retries = 3
-            data = None
+                        data = json.loads(match.group(1))
+                        break
+                    except (ConnectionError, ValueError, json.JSONDecodeError) as exc:
+                        if attempt == 2:
+                            raise HTTPException(status_code=502, detail=f"期权数据抓取失败: {exc}") from exc
+                        print(f"第 {attempt + 1} 次请求失败，准备重试: {exc}")
+                        time.sleep(random.uniform(1.0, 2.0))
 
-            # 带重试机制的请求逻辑
-            for attempt in range(max_retries):
-                try:
-                    # 构造请求头，模拟浏览器访问
-                    headers = {
-                        "User-Agent": random.choice([
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/120.0.0.0 Safari/537.36",
-                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                        ]),
-                        "Referer": "https://quote.eastmoney.com/option/510050.html",
-                        "Accept": "application/json, text/javascript, */*; q=0.01",
-                        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                        "Connection": "keep-alive",
-                        "Cache-Control": "no-cache",
-                        "Pragma": "no-cache",
-                        "Host": "push2.eastmoney.com",
-                        "X-Requested-With": "XMLHttpRequest"
-                    }
-
-                    # 随机延迟，避免高频请求
-                    delay = random.uniform(2.0, 4.0)
-                    if attempt > 0:
-                        delay += random.uniform(1.0, 3.0)
-                    print(f"爬取第{page}页，第{attempt+1}次请求，延迟{delay:.2f}秒")
-                    time.sleep(delay)
-
-                    # 发送GET请求
-                    SESSION.headers.update(headers)
-                    response = SESSION.get(
-                        settings.target_url,
-                        params=params,
-                        timeout=20,
-                        verify=False
-                    )
-                    response.raise_for_status()
-
-                    # 解析JSONP格式响应
-                    content = response.text.strip()
-                    match = re.search(r'^jQuery\d+_\d+\((.*)\);?$', content)
-                    if not match:
-                        raise ValueError("返回数据格式不是有效的JSONP")
-
-                    json_str = match.group(1)
-                    data = json.loads(json_str)
+                if not data or not (data.get("data") or {}).get("diff"):
+                    print(f"第 {page} 页无数据，结束抓取")
                     break
 
-                except requests.RequestException as e:
-                    if attempt == max_retries - 1:
-                        raise
-                    print(f"第{attempt + 1}次请求失败，正在重试: {e}")
-                    time.sleep(random.uniform(1, 3))
+                for item in data["data"]["diff"]:
+                    all_processed_list.append(
+                        {
+                            "contract_code": str(item.get("f12", "")),
+                            "contract_name": str(item.get("f14", "")),
+                            "latest_price": safe_decimal(item.get("f2"), 1000),
+                            "price_change": safe_decimal(item.get("f4"), 1000),
+                            "price_change_rate": safe_decimal(item.get("f3"), 100),
+                            "volume": safe_int(item.get("f5")),
+                            "turnover": safe_decimal(item.get("f6"), 1),
+                            "position_volume": safe_int(item.get("f108")),
+                            "strike_price": safe_decimal(item.get("f161"), 1000),
+                            "remain_days": safe_int(item.get("f162")),
+                            "position_change": safe_int(item.get("f163")),
+                            "settlement_price_yesterday": safe_decimal(item.get("f28"), 1000),
+                            "open_price_today": safe_decimal(item.get("f17"), 1000),
+                            "etf_type": "50ETF",
+                        }
+                    )
 
-            # 无数据则终止分页爬取
-            if not data or not data.get("data", {}).get("diff"):
-                print(f"第{page}页无数据，结束爬取")
-                break
+                page += 1
 
-            # 解析原始数据并结构化
-            raw_list = data["data"]["diff"]
-            for item in raw_list:
-                processed_item = {
-                    "contract_code": str(item.get("f12", "")),
-                    "contract_name": str(item.get("f14", "")),
-                    "latest_price": safe_decimal(item.get("f2"), 1000),
-                    "price_change": safe_decimal(item.get("f4"), 1000),
-                    "price_change_rate": safe_decimal(item.get("f3"), 100),
-                    "volume": safe_int(item.get("f5")),
-                    "turnover": safe_decimal(item.get("f6"), 1),
-                    "position_volume": safe_int(item.get("f108")),
-                    "strike_price": safe_decimal(item.get("f161"), 1000),
-                    "remain_days": safe_int(item.get("f162")),
-                    "position_change": safe_int(item.get("f163")),
-                    "settlement_price_yesterday": safe_decimal(item.get("f28"), 1000),
-                    "open_price_today": safe_decimal(item.get("f17"), 1000),
-                    "etf_type": "50ETF"
-                }
-                all_processed_list.append(processed_item)
+            if not all_processed_list:
+                raise HTTPException(status_code=502, detail="未抓取到 50ETF 期权数据")
 
-            # 翻页
-            page += 1
-
-        return all_processed_list
+            return all_processed_list
+        finally:
+            # 确保浏览器关闭
+            browser.listen.stop()
+            browser.quit()
 
     @staticmethod
     def save_data_to_db(data_list):
-        """将爬取的期权数据批量入库，返回入库条数"""
+        """Replace current table contents with the latest crawl result."""
         if not data_list:
             return 0
 
@@ -143,11 +170,7 @@ class CrawlerService:
         try:
             connection = get_db_connection()
             with connection.cursor() as cursor:
-                # 清空数据表
-                truncate_sql = "TRUNCATE TABLE etf_option_data;"
-                cursor.execute(truncate_sql)
-
-                # 构造入库SQL
+                cursor.execute("TRUNCATE TABLE etf_option_data;")
                 sql = """
                     INSERT INTO etf_option_data (
                         contract_code, contract_name, latest_price, price_change,
@@ -171,11 +194,8 @@ class CrawlerService:
                         open_price_today = VALUES(open_price_today),
                         create_time = NOW()
                 """
-
-                # 组装入库数据
-                insert_data = []
-                for item in data_list:
-                    insert_data.append((
+                insert_data = [
+                    (
                         item["contract_code"],
                         item["contract_name"],
                         item["latest_price"],
@@ -189,18 +209,17 @@ class CrawlerService:
                         item["position_change"],
                         item["settlement_price_yesterday"],
                         item["open_price_today"],
-                        item["etf_type"]
-                    ))
-
-                # 批量插入数据
+                        item["etf_type"],
+                    )
+                    for item in data_list
+                ]
                 cursor.executemany(sql, insert_data)
                 connection.commit()
                 return cursor.rowcount
-        except pymysql.MySQLError as e:
+        except pymysql.MySQLError as exc:
             if connection:
                 connection.rollback()
-            print(f"数据库操作失败: {e}")
-            raise HTTPException(status_code=500, detail=f"数据库操作失败: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"数据库操作失败: {exc}") from exc
         finally:
             if connection:
                 connection.close()

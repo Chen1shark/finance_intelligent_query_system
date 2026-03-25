@@ -1,6 +1,7 @@
 fastapi
 uvicorn
 requests
+DrissionPage
 pymysql
 numpy
 faiss-cpu
