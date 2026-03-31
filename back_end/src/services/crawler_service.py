@@ -21,32 +21,41 @@ os.environ["NO_PROXY"] = "*"
 
 
 class CrawlerService:
+    """负责抓取东方财富 50ETF 期权数据并落库。"""
+
     @staticmethod
     def fetch_option_data():
-        """Fetch 50ETF option data from Eastmoney and return structured rows."""
+        """抓取东方财富 50ETF 期权列表并转换为结构化数据。
+
+        Returns:
+            list[dict]: 标准化后的期权数据列表。
+
+        Raises:
+            HTTPException: 当远程抓取连续失败或未获取到有效数据时抛出。
+        """
         from DrissionPage import ChromiumPage, ChromiumOptions
-        
+
         settings = get_settings()
         all_processed_list = []
         page = 1
         max_pages = 10
-        
+
         # 启动无头浏览器（复用实例）
         co = ChromiumOptions()
         co.headless(True)  # 无头模式
         co.no_imgs(True)   # 不加载图片，加快速度
         browser = ChromiumPage(addr_or_opts=co)
-        
+
         try:
             # 监听目标域名
             domain = settings.target_url.split('/')[2]
             browser.listen.start(domain)
-            
+
             while page <= max_pages:
                 data = None
                 for attempt in range(3):
                     try:
-                        # 每次请求都动态生成时间戳和callback
+                        # 每次请求都动态生成时间戳和 callback，避免缓存命中。
                         timestamp = str(int(time.time() * 1000))
                         callback = f"jQuery{random.randint(1000000000, 9999999999)}_{timestamp}"
                         params = {
@@ -65,34 +74,34 @@ class CrawlerService:
                             "wbp2u": "|0|0|0|web",
                             "_": timestamp,
                         }
-                        
+
                         delay = random.uniform(2.0, 4.0)
                         if attempt > 0:
                             delay += random.uniform(2.0, 4.0)
                         print(f"抓取第 {page} 页，第 {attempt + 1} 次请求，延迟 {delay:.2f} 秒")
                         time.sleep(delay)
 
-                        # 构建完整URL
+                        # 构建完整 URL。
                         query_string = urllib.parse.urlencode(params)
                         full_url = f"{settings.target_url}?{query_string}"
-                        
-                        # 清空监听队列，避免捕获之前的响应
+
+                        # 清空监听队列，避免捕获之前的响应。
                         try:
                             while browser.listen.wait(timeout=0.1):
                                 pass
                         except:
                             pass
-                        
-                        # 访问URL
+
+                        # 访问 URL。
                         browser.get(full_url)
-                        
-                        # 等待响应（通过callback确认是当前请求的响应）
+
+                        # 等待响应，并通过 callback 确认是当前请求的响应。
                         content = None
                         for _ in range(10):
                             pkt = browser.listen.wait()
                             if pkt and pkt.response and pkt.response.body:
                                 body = pkt.response.body
-                                # 处理bytes类型
+                                # 兼容普通文本和压缩字节流两种响应体。
                                 if isinstance(body, bytes):
                                     try:
                                         content = body.decode('utf-8')
@@ -104,12 +113,11 @@ class CrawlerService:
                                             content = body.decode('utf-8', errors='ignore')
                                 else:
                                     content = body
-                                # 确认是当前请求的响应（通过callback匹配）
                                 if content and callback in content:
                                     break
                                 content = None
                             time.sleep(0.5)
-                        
+
                         if not content:
                             raise ConnectionError("未获取到响应数据")
 
@@ -156,13 +164,23 @@ class CrawlerService:
 
             return all_processed_list
         finally:
-            # 确保浏览器关闭
+            # 无论成功与否都关闭浏览器资源，避免后台进程泄漏。
             browser.listen.stop()
             browser.quit()
 
     @staticmethod
     def save_data_to_db(data_list):
-        """Replace current table contents with the latest crawl result."""
+        """将抓取结果写入数据库表。
+
+        Args:
+            data_list: 抓取并标准化后的期权数据列表。
+
+        Returns:
+            int: 本次执行影响的数据库记录数；空数据直接返回 ``0``。
+
+        Raises:
+            HTTPException: 当数据库写入失败时抛出 500 异常。
+        """
         if not data_list:
             return 0
 

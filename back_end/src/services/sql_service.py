@@ -12,8 +12,20 @@ _SELECT_CLAUSE_PATTERN = re.compile(r"^\s*select\s+(distinct\s+)?(.+?)\s+from\s+
 
 
 class SQLService:
+    """负责 SQL 提示词构建、清洗与结果模式判断。"""
+
     @staticmethod
     def build_sql_prompt(user_input, normalized_text, vector_result):
+        """构建用于生成 SQL 的提示词。
+
+        Args:
+            user_input: 用户原始查询文本。
+            normalized_text: 规则层输出的规范化文本。
+            vector_result: 向量检索返回的模板 SQL 或辅助信息。
+
+        Returns:
+            str: 提供给大模型的完整提示词。
+        """
         return f"""请你根据以下三类输入生成可执行的 MySQL 查询 SQL 语句，务必严格遵守输入优先级和约束要求。
 
 #### 优先级定义（核心准则）
@@ -41,6 +53,14 @@ class SQLService:
 
     @staticmethod
     def clean_sql_output(text):
+        """清洗大模型返回的 SQL 文本。
+
+        Args:
+            text: 大模型原始输出，可能包含代码块或多余前缀。
+
+        Returns:
+            str | None: 可直接执行的 SQL 文本；当输入为空时原样返回。
+        """
         if not text:
             return text
 
@@ -69,6 +89,15 @@ class SQLService:
 
     @staticmethod
     def is_single_row_query(sql_text=None, template_sql=None):
+        """判断 SQL 是否会收敛为单条结果。
+
+        Args:
+            sql_text: 当前生成的 SQL 文本。
+            template_sql: 向量匹配出的模板 SQL 文本。
+
+        Returns:
+            bool: 任一 SQL 命中单行查询规则时返回 ``True``。
+        """
         for candidate in (sql_text or "", template_sql or ""):
             if any(pattern.search(candidate) for pattern in _SINGLE_ROW_SQL_PATTERNS):
                 return True
@@ -76,6 +105,14 @@ class SQLService:
 
     @staticmethod
     def force_select_all_fields(sql_text):
+        """将单行查询改写为全字段查询。
+
+        Args:
+            sql_text: 原始 SQL 文本。
+
+        Returns:
+            str | None: 改写后的全字段 SQL；当 SQL 无法识别或为空时原样返回。
+        """
         if not sql_text:
             return sql_text
 
@@ -89,6 +126,15 @@ class SQLService:
 
     @staticmethod
     def finalize_sql(sql_text, template_sql=None):
+        """对生成 SQL 做最终清洗和收尾修正。
+
+        Args:
+            sql_text: 当前生成的 SQL 文本。
+            template_sql: 向量匹配出的模板 SQL 文本。
+
+        Returns:
+            str | None: 清洗后的最终 SQL；若识别为单行查询则自动改写为全字段查询。
+        """
         if not sql_text:
             return sql_text
 
@@ -99,12 +145,32 @@ class SQLService:
 
     @staticmethod
     def detect_result_mode(sql_text, rows):
+        """根据 SQL 和结果集判断前端展示模式。
+
+        Args:
+            sql_text: 最终执行的 SQL 文本。
+            rows: 数据库查询结果列表。
+
+        Returns:
+            str: 单条明细返回 ``detail``，否则返回 ``list``。
+        """
         if len(rows) == 1 and SQLService.is_single_row_query(sql_text=sql_text):
             return "detail"
         return "list"
 
     @staticmethod
     def generate_sql(user_input, normalized_text, vector_result=None, model=None):
+        """调用大模型生成 SQL 语句。
+
+        Args:
+            user_input: 用户原始查询文本。
+            normalized_text: 规则层输出的规范化文本。
+            vector_result: 向量检索返回的模板 SQL 或辅助信息。
+            model: 可选的模型名称覆盖项。
+
+        Returns:
+            str | None: 清洗后的 SQL 语句；当模型未返回内容时返回 ``None``。
+        """
         settings = get_settings()
         prompt = SQLService.build_sql_prompt(user_input, normalized_text, vector_result or "")
         client = get_llm_client()

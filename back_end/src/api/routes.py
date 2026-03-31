@@ -19,11 +19,24 @@ CRAWL_ERROR_MESSAGE = "抓取失败，请稍后重试"
 
 
 def _validate_text_input(text: str):
+    """校验文本入参是否有效。
+
+    Args:
+        text: 用户提交的自然语言查询文本。
+
+    Raises:
+        HTTPException: 当输入为空或仅包含空白字符时抛出 400 异常。
+    """
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="输入文本不能为空")
 
 
 def _get_data_status() -> dict:
+    """查询最新抓取数据的统计状态。
+
+    Returns:
+        dict: 包含最新更新时间和最新记录数量的状态字典。
+    """
     rows = run_query(
         """
         SELECT
@@ -40,6 +53,11 @@ def _get_data_status() -> dict:
 
 
 def _get_latest_create_time():
+    """获取表内最新数据的创建时间。
+
+    Returns:
+        datetime | None: 最新 ``create_time``；若结果为空或时间解析失败则返回 ``None``。
+    """
     rows = run_query("SELECT MAX(create_time) AS latest_create_time FROM etf_option_data")
     value = rows[0].get("latest_create_time") if rows else None
     if isinstance(value, str):
@@ -51,6 +69,11 @@ def _get_latest_create_time():
 
 
 def _build_crawl_failure_response():
+    """构造抓取频率受限时的统一响应体。
+
+    Returns:
+        dict: 面向前端的限流响应数据，附带当前库内数据状态。
+    """
     try:
         status = _get_data_status()
     except Exception:
@@ -70,6 +93,14 @@ def _build_crawl_failure_response():
 
 
 def _build_crawl_error_response(detail: str = ""):
+    """构造抓取失败时的统一响应体。
+
+    Args:
+        detail: 附加错误详情，用于补充失败原因。
+
+    Returns:
+        dict: 面向前端的失败响应数据，附带当前库内数据状态。
+    """
     try:
         status = _get_data_status()
     except Exception:
@@ -90,6 +121,17 @@ def _build_crawl_error_response(detail: str = ""):
 
 
 def _prepare_query_context(text: str):
+    """准备查询链路所需的语义和模板上下文。
+
+    Args:
+        text: 用户原始查询文本。
+
+    Returns:
+        tuple[str, str | None, list[dict], str]: 规范化文本、核心需求、向量匹配结果和最佳模板 SQL。
+
+    Raises:
+        HTTPException: 当大模型未能返回规范化结果时抛出 500 异常。
+    """
     normalized_text = SemanticService.normalize_50etf_text(text)
     if normalized_text is None:
         raise HTTPException(status_code=500, detail="模型调用失败，请检查模型配置")
@@ -102,6 +144,17 @@ def _prepare_query_context(text: str):
 
 
 def _build_query_payload(text: str):
+    """组装查询接口返回的完整数据载荷。
+
+    Args:
+        text: 用户原始查询文本。
+
+    Returns:
+        dict: 包含规范化结果、生成 SQL、查询结果和结果模式的响应数据。
+
+    Raises:
+        HTTPException: 当 SQL 生成失败时抛出 500 异常。
+    """
     normalized_text, core_content, results, vector_sql = _prepare_query_context(text)
     sql = SQLService.generate_sql(text, normalized_text, vector_sql)
     if not sql:
@@ -122,6 +175,11 @@ def _build_query_payload(text: str):
 
 @router.get("/crawl_50etf", summary="抓取并存储 50ETF 期权数据")
 def crawl_50etf_data():
+    """抓取 50ETF 期权数据并写入数据库。
+
+    Returns:
+        dict: 抓取成功、限流或失败时的统一响应体。
+    """
     try:
         option_data = CrawlerService.fetch_option_data()
         inserted_count = CrawlerService.save_data_to_db(option_data)
@@ -145,6 +203,14 @@ def crawl_50etf_data():
 
 @router.get("/data_status", summary="获取 50ETF 数据最新状态")
 def get_data_status():
+    """获取当前数据库中的 50ETF 数据状态。
+
+    Returns:
+        dict: 包含最新更新时间和记录数的统一响应体。
+
+    Raises:
+        HTTPException: 当状态查询失败时抛出 500 异常。
+    """
     try:
         return {
             "code": 200,
@@ -159,6 +225,17 @@ def get_data_status():
 
 @router.post("/normalize", summary="规范化 50ETF 查询文本")
 def normalize_text(request: NormalizeRequest):
+    """将用户查询文本转换为规则化描述。
+
+    Args:
+        request: 包含用户原始查询文本的请求体。
+
+    Returns:
+        dict: 包含原始文本和规范化结果的统一响应体。
+
+    Raises:
+        HTTPException: 当输入不合法或模型调用失败时抛出。
+    """
     _validate_text_input(request.text)
     try:
         result = SemanticService.normalize_50etf_text(request.text)
@@ -181,6 +258,17 @@ def normalize_text(request: NormalizeRequest):
 
 @router.post("/extract_core", summary="提取核心需求")
 def extract_core(request: NormalizeRequest):
+    """从用户查询中提取核心需求文本。
+
+    Args:
+        request: 包含用户原始查询文本的请求体。
+
+    Returns:
+        dict: 包含原始文本和核心需求的统一响应体。
+
+    Raises:
+        HTTPException: 当输入不合法或模型调用失败时抛出。
+    """
     _validate_text_input(request.text)
     try:
         normalized_text = SemanticService.normalize_50etf_text(request.text)
@@ -205,6 +293,17 @@ def extract_core(request: NormalizeRequest):
 
 @router.post("/match", summary="匹配最相似模板并返回 SQL")
 def match_template(request: NormalizeRequest):
+    """基于向量检索结果返回最相似的模板 SQL。
+
+    Args:
+        request: 包含用户原始查询文本的请求体。
+
+    Returns:
+        dict: 包含模板问题、相似度和最终 SQL 的统一响应体。
+
+    Raises:
+        HTTPException: 当输入不合法、未匹配到模板或处理失败时抛出。
+    """
     _validate_text_input(request.text)
     try:
         normalized_text, _, results, vector_sql = _prepare_query_context(request.text)
@@ -231,6 +330,17 @@ def match_template(request: NormalizeRequest):
 
 @router.post("/query", summary="生成 SQL 并查询数据库")
 def query_data(request: NormalizeRequest):
+    """执行完整查询链路并返回查询结果。
+
+    Args:
+        request: 包含用户原始查询文本的请求体。
+
+    Returns:
+        dict: 不含调试信息的标准查询响应体。
+
+    Raises:
+        HTTPException: 当输入不合法、SQL 生成失败或查询失败时抛出。
+    """
     _validate_text_input(request.text)
     try:
         payload = _build_query_payload(request.text)
@@ -248,6 +358,17 @@ def query_data(request: NormalizeRequest):
 
 @router.post("/query_debug", summary="生成 SQL 并查询数据库（带性能分析）")
 def query_data_debug(request: NormalizeRequest):
+    """执行带耗时分析的完整查询链路。
+
+    Args:
+        request: 包含用户原始查询文本的请求体。
+
+    Returns:
+        dict: 包含查询结果和各阶段耗时统计的调试响应体。
+
+    Raises:
+        HTTPException: 当输入不合法、SQL 生成失败或查询失败时抛出。
+    """
     _validate_text_input(request.text)
     try:
         start_time = time.time()

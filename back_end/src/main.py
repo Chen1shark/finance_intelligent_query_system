@@ -13,6 +13,14 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """在应用启动阶段预热向量索引资源。
+
+    Args:
+        app: 当前 FastAPI 应用实例。
+
+    Yields:
+        None: 控制权交还给 FastAPI 继续生命周期流程。
+    """
     VectorService.rebuild_vector_store_embeddings()
     yield
 

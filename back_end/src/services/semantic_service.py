@@ -6,7 +6,11 @@ RULES_FILE = DATA_DIR / "rules_50etf.json"
 
 
 def _load_rules():
-    """加载规则库文件"""
+    """加载本地规则库文件。
+
+    Returns:
+        dict | None: 解析成功时返回规则库字典，失败时返回 ``None``。
+    """
     try:
         with open(RULES_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -20,19 +24,17 @@ RULES_DATA = _load_rules()
 
 
 class SemanticService:
+    """负责用户问题的语义规范化和核心需求提取。"""
 
     @staticmethod
     def normalize_50etf_text(user_input):
-        """
-        调用 OpenAI 兼容接口规范化用户输入。
-        基于 rules_50etf.json 规则库进行解析和转换。
-        输出结构化的规则约束信息，而非直接的SQL。
+        """调用大模型将用户输入转换为规则化约束文本。
 
-        参数:
-            user_input (str): 用户输入的原始文本
+        Args:
+            user_input: 用户输入的原始自然语言文本。
 
-        返回:
-            str: 结构化的约束文本 或 "无有效50ETF相关信息"
+        Returns:
+            str | None: 结构化规则文本；当输入为空或模型调用异常时返回 ``None``。
         """
 
         # 检查输入是否为空
@@ -146,12 +148,13 @@ class SemanticService:
 
     @staticmethod
     def rule_filter_core_need(core_need):
-        """
-        基于规则库对核心需求文本进行清洗与标准化。
-        参数:
-            core_need (str): 核心需求文本。
-        返回:
-            str | None: 规则过滤后的核心需求文本。
+        """对核心需求文本做规则级清洗和标准化。
+
+        Args:
+            core_need: 规范化流程提取出的核心需求文本。
+
+        Returns:
+            str | None: 清洗后的核心需求文本；无输入时原样返回。
         """
         if not core_need:
             return core_need
@@ -185,12 +188,13 @@ class SemanticService:
 
     @staticmethod
     def extract_core_need_from_text(result):
-        """
-        从规则匹配结果中提取"核心需求（纠错后）"单行文本。
-        参数:
-            result (str): 规则匹配的完整输出文本。
-        返回:
-            str | None: 纠错后的核心需求文本，或空值。
+        """从规则化文本中提取核心需求行。
+
+        Args:
+            result: 规则匹配阶段返回的完整文本。
+
+        Returns:
+            str | None: 提取出的核心需求文本；未提取到时返回 ``None``。
         """
         if not result:
             return None
@@ -210,12 +214,13 @@ class SemanticService:
 
     @staticmethod
     def extract_core_need(user_input):
-        """
-        从规则匹配结果中提取"核心需求（纠错后）"单行文本。
-        参数:
-            user_input (str): 用户输入的原始文本。
-        返回:
-            str | None: 纠错后的核心需求文本，或空值。
+        """从用户原始输入中直接提取核心需求。
+
+        Args:
+            user_input: 用户输入的原始自然语言文本。
+
+        Returns:
+            str | None: 经规范化与规则清洗后的核心需求文本。
         """
         result = SemanticService.normalize_50etf_text(user_input)
         core_need = SemanticService.extract_core_need_from_text(result)

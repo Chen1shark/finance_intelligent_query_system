@@ -5,7 +5,14 @@ _client = None
 
 
 def get_llm_client() -> OpenAI:
-    """获取 OpenAI 兼容客户端单例"""
+    """获取并缓存大模型客户端实例。
+
+    Returns:
+        OpenAI: 已按项目配置初始化的 OpenAI 兼容客户端。
+
+    Raises:
+        ValueError: 当 ``API_KEY`` 未配置时抛出。
+    """
     global _client
     if _client is None:
         settings = get_settings()

@@ -45,4 +45,9 @@ class Settings(BaseSettings):
 
 @lru_cache()
 def get_settings() -> Settings:
+    """获取全局缓存的应用配置对象。
+
+    Returns:
+        Settings: 从环境变量和 ``.env`` 文件解析得到的配置实例。
+    """
     return Settings()

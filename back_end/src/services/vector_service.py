@@ -12,23 +12,24 @@ _CACHED_VECTORS = None
 
 
 class VectorService:
+    """负责向量库读写、向量化和相似度检索。"""
 
     @staticmethod
     def load_vector_store():
-        """
-        读取向量库文件并返回结构化数据。
-        返回:
-            dict: 向量库内容，包含标准问题与SQL字段。
+        """读取本地向量库文件。
+
+        Returns:
+            dict: 向量库内容，包含标准问题、SQL 模板和 embedding 信息。
         """
         with open(VECTOR_STORE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
 
     @staticmethod
     def save_vector_store(data):
-        """
-        将向量库数据持久化到本地JSON文件。
-        参数:
-            data (dict): 向量库结构化数据。
+        """将向量库数据持久化到本地 JSON 文件。
+
+        Args:
+            data: 待写入的向量库结构化数据。
         """
         settings = get_settings()
         embedding_model = data.get("embedding_model", settings.embed_model)
@@ -51,12 +52,16 @@ class VectorService:
 
     @staticmethod
     def embed_text(text):
-        """
-        调用阿里云OpenAI兼容接口生成文本向量。
-        参数:
-            text (str): 待向量化的文本。
-        返回:
-            np.ndarray: 向量化后的浮点向量。
+        """调用向量模型生成文本 embedding。
+
+        Args:
+            text: 待向量化的文本内容。
+
+        Returns:
+            np.ndarray: ``float32`` 类型的一维向量。
+
+        Raises:
+            ValueError: 当模型未返回有效 embedding 时抛出。
         """
         settings = get_settings()
         client = get_llm_client()
@@ -70,11 +75,12 @@ class VectorService:
 
     @staticmethod
     def normalize_vectors(vectors):
-        """
-        对向量矩阵进行L2归一化以便计算余弦相似度。
-        参数:
-            vectors (np.ndarray): 形状为(n, d)的向量矩阵。
-        返回:
+        """对向量矩阵做 L2 归一化。
+
+        Args:
+            vectors: 形状为 ``(n, d)`` 的向量矩阵。
+
+        Returns:
             np.ndarray: 归一化后的向量矩阵。
         """
         norms = np.linalg.norm(vectors, axis=1, keepdims=True)
@@ -83,9 +89,9 @@ class VectorService:
 
     @staticmethod
     def rebuild_vector_store_embeddings():
-        """
-        启动时对向量库中的question重新向量化并写回文件，同时写入内存缓存。
-        返回:
+        """重建向量库条目的 embedding 并刷新缓存。
+
+        Returns:
             int: 完成向量化的条目数量。
         """
         global _CACHED_ITEMS, _CACHED_VECTORS
@@ -103,12 +109,13 @@ class VectorService:
 
     @staticmethod
     def get_item_embeddings(items):
-        """
-        获取模板条目的向量，优先使用内存缓存。
-        参数:
-            items (list): 模板条目列表。
-        返回:
-            list[np.ndarray]: 向量列表。
+        """获取模板条目的向量列表，优先复用缓存。
+
+        Args:
+            items: 向量库中的模板条目列表。
+
+        Returns:
+            list[np.ndarray]: 每个模板条目对应的向量列表。
         """
         if _CACHED_ITEMS is items and isinstance(_CACHED_VECTORS, list) and len(_CACHED_VECTORS) == len(items):
             if all(isinstance(v, np.ndarray) and v.size > 0 for v in _CACHED_VECTORS):
@@ -126,12 +133,13 @@ class VectorService:
 
     @staticmethod
     def build_faiss_index(vectors):
-        """
-        基于向量构建FAISS索引。
-        参数:
-            vectors (list): 向量列表。
-        返回:
-            faiss.IndexFlatIP: 内积索引，用于相似度检索。
+        """基于向量列表构建 FAISS 相似度索引。
+
+        Args:
+            vectors: 模板向量列表。
+
+        Returns:
+            faiss.IndexFlatIP: 基于内积计算相似度的索引对象。
         """
         matrix = np.vstack(vectors).astype("float32")
         matrix = VectorService.normalize_vectors(matrix)
@@ -142,14 +150,15 @@ class VectorService:
 
     @staticmethod
     def match_user_query(user_input, top_k=1, core_need=None):
-        """
-        使用核心需求向量检索最相似的标准问题与SQL。
-        参数:
-            user_input (str): 用户原始输入。
-            top_k (int): 返回最相似的条目数量。
-            core_need (str): 预提取的核心需求，为None时自动提取。
-        返回:
-            list[dict] | None: 匹配结果列表，包含相似度、标准问题与SQL。
+        """根据用户需求检索最相似的模板问题和 SQL。
+
+        Args:
+            user_input: 用户原始查询文本。
+            top_k: 需要返回的最相似结果条数。
+            core_need: 已提取好的核心需求；为空时自动提取。
+
+        Returns:
+            list[dict] | None: 匹配结果列表；当无法提取核心需求或无模板数据时返回 ``None``。
         """
         if core_need is None:
             core_need = SemanticService.extract_core_need(user_input)

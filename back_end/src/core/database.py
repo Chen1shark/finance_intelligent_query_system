@@ -5,7 +5,14 @@ from src.core.config import get_settings
 
 
 def get_db_connection():
-    """创建并返回MySQL数据库连接"""
+    """创建并返回 MySQL 数据库连接。
+
+    Returns:
+        pymysql.connections.Connection: 可执行数据库操作的连接对象。
+
+    Raises:
+        HTTPException: 当数据库连接失败时抛出 500 异常。
+    """
     settings = get_settings()
     try:
         connection = pymysql.connect(
@@ -25,7 +32,11 @@ def get_db_connection():
 
 @contextmanager
 def db_connection():
-    """数据库连接上下文管理器"""
+    """以上下文管理器方式提供数据库连接。
+
+    Yields:
+        pymysql.connections.Connection: 当前作用域内可复用的数据库连接。
+    """
     conn = get_db_connection()
     try:
         yield conn
@@ -34,7 +45,17 @@ def db_connection():
 
 
 def run_query(sql):
-    """执行SELECT查询并返回结果"""
+    """执行只读 SQL 查询并返回结果。
+
+    Args:
+        sql: 待执行的 SQL 语句，仅允许 ``SELECT`` 查询。
+
+    Returns:
+        list[dict]: 查询结果列表，每一行以字典形式返回。
+
+    Raises:
+        HTTPException: 当 SQL 非法或执行失败时抛出。
+    """
     if not sql or not sql.strip():
         raise HTTPException(status_code=400, detail="SQL不能为空")
     sql_text = sql.strip()
