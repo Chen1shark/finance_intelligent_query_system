@@ -9,6 +9,20 @@ _SINGLE_ROW_SQL_PATTERNS = (
     re.compile(r"\bcontract_name\s*=", re.IGNORECASE),
 )
 _SELECT_CLAUSE_PATTERN = re.compile(r"^\s*select\s+(distinct\s+)?(.+?)\s+from\s+", re.IGNORECASE | re.DOTALL)
+_WHERE_CLAUSE_PATTERN = re.compile(
+    r"\bwhere\b\s+(.*?)(?=\border\s+by\b|\blimit\b|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_ORDER_BY_CLAUSE_PATTERN = re.compile(
+    r"\border\s+by\b\s+(.*?)(?=\blimit\b|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_LIMIT_CLAUSE_PATTERN = re.compile(r"\blimit\s+(\d+)\b", re.IGNORECASE)
+_CONDITION_SIGNATURE_PATTERN = re.compile(
+    r"\b[\w`]+\b\s*(=|>=|<=|<>|!=|>|<|like)\s*('(?:[^']|''*)*'|\"(?:[^\"]|\"\")*\"|-?\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_SQL_LITERAL_PATTERN = re.compile(r"'(?:[^']|''*)*'|\"(?:[^\"]|\"\")*\"|-?\d+(?:\.\d+)?")
 
 
 class SQLService:
@@ -144,6 +158,106 @@ class SQLService:
         return cleaned_sql
 
     @staticmethod
+    def build_sql_retry_prompt(user_input, normalized_text, failed_sql, error_detail):
+        """构建 SQL 失败后的受约束修复提示词。"""
+        return f"""你需要修复一条执行报错的 MySQL SELECT 语句。
+
+用户原始问题：
+{user_input}
+
+规则匹配结果（最高优先级）：
+{normalized_text}
+
+执行失败的 SQL：
+{failed_sql}
+
+数据库报错信息：
+{error_detail}
+
+修复约束：
+1. 只允许修复 SQL 语法、字段名、表字段引用或类型转换错误。
+2. 严禁删除、弱化或改写原始查询条件。
+3. 严禁扩大查询范围，严禁新增与用户原始问题无关的条件。
+4. 必须保留原 SQL 中的筛选值、比较关系、排序方向和 LIMIT 数量。
+5. 只输出一条可执行的 MySQL SELECT 语句，不要输出解释。
+"""
+
+    @staticmethod
+    def _extract_where_clause(sql_text):
+        match = _WHERE_CLAUSE_PATTERN.search(sql_text or "")
+        return match.group(1).strip() if match else ""
+
+    @staticmethod
+    def _extract_order_by_clause(sql_text):
+        match = _ORDER_BY_CLAUSE_PATTERN.search(sql_text or "")
+        return match.group(1).strip() if match else ""
+
+    @staticmethod
+    def _extract_limit_value(sql_text):
+        match = _LIMIT_CLAUSE_PATTERN.search(sql_text or "")
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _extract_condition_signatures(sql_text):
+        where_clause = SQLService._extract_where_clause(sql_text)
+        return [
+            (operator.lower(), literal.strip())
+            for operator, literal in _CONDITION_SIGNATURE_PATTERN.findall(where_clause)
+        ]
+
+    @staticmethod
+    def _extract_literals(sql_text):
+        return [literal.strip() for literal in _SQL_LITERAL_PATTERN.findall(sql_text or "")]
+
+    @staticmethod
+    def is_safe_retry_sql(baseline_sql, retried_sql):
+        """校验重试修复后的 SQL 未弱化原始查询条件。"""
+        if not retried_sql:
+            return False
+
+        cleaned_baseline = SQLService.clean_sql_output(baseline_sql) or ""
+        cleaned_retried = SQLService.clean_sql_output(retried_sql) or ""
+
+        if not cleaned_retried.lower().startswith("select"):
+            return False
+
+        baseline_where = SQLService._extract_where_clause(cleaned_baseline)
+        retried_where = SQLService._extract_where_clause(cleaned_retried)
+        if baseline_where and not retried_where:
+            return False
+
+        baseline_literals = SQLService._extract_literals(baseline_where)
+        retried_literals = SQLService._extract_literals(retried_where)
+        for literal in baseline_literals:
+            if literal not in retried_literals:
+                return False
+
+        baseline_conditions = SQLService._extract_condition_signatures(cleaned_baseline)
+        retried_conditions = SQLService._extract_condition_signatures(cleaned_retried)
+        if len(retried_conditions) < len(baseline_conditions):
+            return False
+        for condition in baseline_conditions:
+            if condition not in retried_conditions:
+                return False
+
+        baseline_limit = SQLService._extract_limit_value(cleaned_baseline)
+        retried_limit = SQLService._extract_limit_value(cleaned_retried)
+        if baseline_limit != retried_limit:
+            return False
+
+        baseline_order = SQLService._extract_order_by_clause(cleaned_baseline)
+        retried_order = SQLService._extract_order_by_clause(cleaned_retried)
+        if baseline_order:
+            if not retried_order:
+                return False
+            baseline_directions = re.findall(r"\basc\b|\bdesc\b", baseline_order, re.IGNORECASE)
+            retried_directions = re.findall(r"\basc\b|\bdesc\b", retried_order, re.IGNORECASE)
+            if baseline_directions != retried_directions:
+                return False
+
+        return True
+
+    @staticmethod
     def detect_result_mode(sql_text, rows):
         """根据 SQL 和结果集判断前端展示模式。
 
@@ -178,6 +292,25 @@ class SQLService:
             model=model or settings.model_name,
             messages=[
                 {"role": "system", "content": "你是一个 MySQL SQL 生成器，只输出 SQL 语句本身。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=settings.temperature,
+            extra_body={"enable_thinking": settings.thinking_enable},
+        )
+        if response.choices and response.choices[0].message and response.choices[0].message.content:
+            return SQLService.clean_sql_output(response.choices[0].message.content)
+        return None
+
+    @staticmethod
+    def repair_sql(user_input, normalized_text, failed_sql, error_detail, model=None):
+        """在执行报错后受约束地修复 SQL。"""
+        settings = get_settings()
+        prompt = SQLService.build_sql_retry_prompt(user_input, normalized_text, failed_sql, error_detail)
+        client = get_llm_client()
+        response = client.chat.completions.create(
+            model=model or settings.model_name,
+            messages=[
+                {"role": "system", "content": "你是一个 MySQL SQL 修复器，只能修复报错 SQL 的语法或字段问题，不得改变查询条件。"},
                 {"role": "user", "content": prompt},
             ],
             temperature=settings.temperature,

@@ -33,6 +33,7 @@ const hasRows = computed(() => rows.value.length > 0)
 const isSingleResult = computed(() => rows.value.length === 1)
 const answerText = computed(() => buildAnswerText(lastSubmittedQuery.value, rows.value, resultMode.value))
 const metrics = computed(() => buildMetrics(rows.value))
+const sql = computed(() => queryResult.value?.sql ?? '')
 const charts = computed(() => buildCharts(rows.value))
 
 async function loadStatus(silent = false) {
@@ -183,6 +184,16 @@ onMounted(() => {
               :query-time="lastQueryTime"
             />
 
+            <section v-if="sql" class="section-card sql-card">
+              <div class="section-head">
+                <div>
+                  <span class="section-kicker">生成SQL</span>
+                  <h2>实际执行的SQL语句</h2>
+                </div>
+              </div>
+              <pre class="sql-code">{{ sql }}</pre>
+            </section>
+
             <SingleResultCard v-if="isSingleResult" :row="rows[0]" />
 
             <MetricsGrid v-if="metrics.length" :metrics="metrics" />
@@ -295,6 +306,23 @@ onMounted(() => {
 
 .table-card {
   overflow: visible;
+}
+
+.sql-card {
+  background: #f8f9fa;
+}
+
+.sql-code {
+  margin: 0;
+  padding: 1rem;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border-radius: 8px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.9rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .loading-card p,
