@@ -1,3 +1,5 @@
+from typing import Any, Dict
+
 from pydantic import BaseModel
 
 
@@ -9,3 +11,12 @@ class NormalizeRequest(BaseModel):
     """
 
     text: str
+
+
+def api_response(data: Any = None, msg: str = "处理成功", code: int = 200) -> Dict[str, Any]:
+    """Build the project's unified API response shape."""
+    return {
+        "code": code,
+        "msg": msg,
+        "data": data,
+    }

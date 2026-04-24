@@ -4,7 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 
-from src.api.schemas import NormalizeRequest
+from src.api.schemas import NormalizeRequest, api_response
 from src.core.config import get_settings
 from src.core.database import run_query
 from src.services.crawler_service import CrawlerService
@@ -66,14 +66,14 @@ def _build_crawl_failure_response():
             "latest_record_count": 0,
         }
 
-    return {
-        "code": 42901,
-        "msg": CRAWL_FAILURE_MESSAGE,
-        "data": {
+    return api_response(
+        code=42901,
+        msg=CRAWL_FAILURE_MESSAGE,
+        data={
             "total": 0,
             **status,
         },
-    }
+    )
 
 
 def _build_crawl_error_response(detail: str = ""):
@@ -87,14 +87,14 @@ def _build_crawl_error_response(detail: str = ""):
         }
 
     msg = f"{CRAWL_ERROR_MESSAGE}：{detail}" if detail else CRAWL_ERROR_MESSAGE
-    return {
-        "code": 50201,
-        "msg": msg,
-        "data": {
+    return api_response(
+        code=50201,
+        msg=msg,
+        data={
             "total": 0,
             **status,
         },
-    }
+    )
 
 
 def _prepare_query_context(text: str):
@@ -178,14 +178,13 @@ def crawl_50etf_data():
     try:
         option_data = CrawlerService.fetch_option_data()
         inserted_count = CrawlerService.save_data_to_db(option_data)
-        return {
-            "code": 200,
-            "msg": "数据入库成功",
-            "data": {
+        return api_response(
+            msg="数据入库成功",
+            data={
                 "total": inserted_count,
                 **_get_data_status(),
             },
-        }
+        )
     except HTTPException as exc:
         logger.warning("crawl_50etf failed with HTTPException: %s", exc.detail)
         if exc.status_code == 429:
@@ -200,11 +199,7 @@ def crawl_50etf_data():
 def get_data_status():
     """获取当前数据库中的 50ETF 数据状态。"""
     try:
-        return {
-            "code": 200,
-            "msg": "处理成功",
-            "data": _get_data_status(),
-        }
+        return api_response(data=_get_data_status())
     except HTTPException as exc:
         raise exc
     except Exception as exc:  # pragma: no cover
@@ -220,14 +215,12 @@ def normalize_text(request: NormalizeRequest):
         if result is None:
             raise HTTPException(status_code=500, detail="模型调用失败，请检查模型配置")
 
-        return {
-            "code": 200,
-            "msg": "处理成功",
-            "data": {
+        return api_response(
+            data={
                 "original_text": request.text,
                 "normalized_text": result,
             },
-        }
+        )
     except HTTPException as exc:
         raise exc
     except Exception as exc:
@@ -245,14 +238,12 @@ def extract_core(request: NormalizeRequest):
 
         core_content = SemanticService.extract_core_need_from_text(normalized_text)
         core_content = SemanticService.rule_filter_core_need(core_content)
-        return {
-            "code": 200,
-            "msg": "处理成功",
-            "data": {
+        return api_response(
+            data={
                 "original_text": request.text,
                 "core_need": core_content,
             },
-        }
+        )
     except HTTPException as exc:
         raise exc
     except Exception as exc:
@@ -269,17 +260,15 @@ def match_template(request: NormalizeRequest):
             raise HTTPException(status_code=404, detail="未匹配到模板")
 
         best = results[0]
-        return {
-            "code": 200,
-            "msg": "处理成功",
-            "data": {
+        return api_response(
+            data={
                 "normalized_text": normalized_text,
                 "core_need": best.get("core_need"),
                 "score": best.get("score"),
                 "question": best.get("question"),
                 "sql": SQLService.finalize_sql(vector_sql, vector_sql),
             },
-        }
+        )
     except HTTPException as exc:
         raise exc
     except Exception as exc:
@@ -293,11 +282,7 @@ def query_data(request: NormalizeRequest):
     try:
         payload = _build_query_payload(request.text)
         payload.pop("vector_result", None)
-        return {
-            "code": 200,
-            "msg": "处理成功",
-            "data": payload,
-        }
+        return api_response(data=payload)
     except HTTPException as exc:
         raise exc
     except Exception as exc:
@@ -365,10 +350,8 @@ def query_data_debug(request: NormalizeRequest):
             step5_time,
         )
 
-        return {
-            "code": 200,
-            "msg": "处理成功",
-            "data": {
+        return api_response(
+            data={
                 "normalized_text": normalized_text,
                 "core_need": core_content,
                 "sql": sql,
@@ -387,7 +370,7 @@ def query_data_debug(request: NormalizeRequest):
                     },
                 },
             },
-        }
+        )
     except HTTPException as exc:
         raise exc
     except Exception as exc:
