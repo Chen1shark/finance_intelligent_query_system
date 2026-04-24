@@ -1,7 +1,10 @@
 from contextlib import contextmanager
+import logging
 import pymysql
 from fastapi import HTTPException
 from src.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 def get_db_connection():
@@ -26,7 +29,7 @@ def get_db_connection():
         )
         return connection
     except pymysql.MySQLError as e:
-        print(f"数据库连接失败: {e}")
+        logger.exception("Database connection failed")
         raise HTTPException(status_code=500, detail=f"数据库连接失败: {str(e)}")
 
 

@@ -1,8 +1,10 @@
 import json
+import logging
 from src.core.config import get_settings, DATA_DIR
 from src.core.llm_client import get_llm_client
 
 RULES_FILE = DATA_DIR / "rules_50etf.json"
+logger = logging.getLogger(__name__)
 
 
 def _load_rules():
@@ -15,7 +17,7 @@ def _load_rules():
         with open(RULES_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
-        print(f"Error loading rules from {RULES_FILE}: {e}")
+        logger.exception("Error loading rules from %s", RULES_FILE)
         return None
 
 
@@ -144,7 +146,7 @@ class SemanticService:
             return "模型未返回有效内容"
         except Exception as e:
             # 捕获连接错误（如服务未启动）或其他异常
-            print(f"\n错误: 发生异常 - {str(e)}")
+            logger.exception("LLM normalization failed")
             return None
 
     @staticmethod

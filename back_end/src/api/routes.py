@@ -1,3 +1,4 @@
+import logging
 import time
 from datetime import datetime
 
@@ -13,6 +14,7 @@ from src.services.vector_service import VectorService
 
 settings = get_settings()
 router = APIRouter(prefix=settings.api_prefix)
+logger = logging.getLogger(__name__)
 
 CRAWL_FAILURE_MESSAGE = "更新过于频繁，请几分钟后更新"
 CRAWL_ERROR_MESSAGE = "抓取失败，请稍后重试"
@@ -128,7 +130,7 @@ def _execute_sql_with_retry(text: str, normalized_text: str, vector_sql: str, in
             return current_sql, rows, attempt
         except HTTPException as exc:
             last_error = str(exc.detail)
-            print(f"SQL execution attempt {attempt} failed: {last_error}")
+            logger.warning("SQL execution attempt %s failed: %s", attempt, last_error)
 
             if attempt >= MAX_SQL_EXECUTION_ATTEMPTS:
                 raise HTTPException(
@@ -185,12 +187,12 @@ def crawl_50etf_data():
             },
         }
     except HTTPException as exc:
-        print(f"crawl_50etf failed with HTTPException: {exc.detail}")
+        logger.warning("crawl_50etf failed with HTTPException: %s", exc.detail)
         if exc.status_code == 429:
             return _build_crawl_failure_response()
         return _build_crawl_error_response(str(exc.detail))
     except Exception as exc:  # pragma: no cover
-        print(f"crawl_50etf failed: {exc}")
+        logger.exception("crawl_50etf failed")
         return _build_crawl_error_response(str(exc))
 
 
@@ -308,14 +310,14 @@ def query_data_debug(request: NormalizeRequest):
     _validate_text_input(request.text)
     try:
         start_time = time.time()
-        print("\n=== 查询流程开始 ===")
-        print(f"用户输入: {request.text}")
-        print(f"开始时间: {time.strftime('%H:%M:%S', time.localtime(start_time))}")
+        logger.info("Query debug flow started")
+        logger.info("User input: %s", request.text)
+        logger.info("Start time: %s", time.strftime("%H:%M:%S", time.localtime(start_time)))
 
         step1_start = time.time()
         normalized_text = SemanticService.normalize_50etf_text(request.text)
         step1_time = time.time() - step1_start
-        print(f"\n[步骤 1] 语义规范化: {step1_time:.3f}s")
+        logger.info("Step 1 normalization: %.3fs", step1_time)
         if normalized_text is None:
             raise HTTPException(status_code=500, detail="模型调用失败，请检查模型配置")
 
@@ -323,43 +325,45 @@ def query_data_debug(request: NormalizeRequest):
         core_content = SemanticService.extract_core_need_from_text(normalized_text)
         core_content = SemanticService.rule_filter_core_need(core_content)
         step2_time = time.time() - step2_start
-        print(f"[步骤 2] 核心需求提取: {step2_time:.3f}s")
-        print(f"核心需求: {core_content}")
+        logger.info("Step 2 core extraction: %.3fs", step2_time)
+        logger.info("Core need: %s", core_content)
 
         step3_start = time.time()
         results = VectorService.match_user_query(request.text, top_k=1, core_need=core_content)
         step3_time = time.time() - step3_start
-        print(f"[步骤 3] 向量检索: {step3_time:.3f}s")
+        logger.info("Step 3 vector search: %.3fs", step3_time)
 
         vector_sql = ""
         if results:
             vector_sql = results[0].get("sql") or ""
-            print(f"匹配模板: {results[0].get('question', '')}")
-            print(f"相似度: {results[0].get('score', 0):.4f}")
+            logger.info("Matched template: %s", results[0].get("question", ""))
+            logger.info("Similarity score: %.4f", results[0].get("score", 0))
 
         step4_start = time.time()
         initial_sql = _generate_initial_sql(request.text, normalized_text, vector_sql)
         step4_time = time.time() - step4_start
-        print(f"[步骤 4] SQL 生成: {step4_time:.3f}s")
-        print(f"初始 SQL: {initial_sql}")
+        logger.info("Step 4 SQL generation: %.3fs", step4_time)
+        logger.info("Initial SQL: %s", initial_sql)
 
         step5_start = time.time()
         sql, rows, execution_attempts = _execute_sql_with_retry(request.text, normalized_text, vector_sql, initial_sql)
         step5_time = time.time() - step5_start
-        print(f"[步骤 5] 数据库查询: {step5_time:.3f}s")
-        print(f"最终 SQL: {sql}")
-        print(f"SQL 执行次数: {execution_attempts}")
-        print(f"返回数据: {len(rows)} 条")
+        logger.info("Step 5 database query: %.3fs", step5_time)
+        logger.info("Final SQL: %s", sql)
+        logger.info("SQL execution attempts: %s", execution_attempts)
+        logger.info("Returned rows: %s", len(rows))
 
         total_time = time.time() - start_time
-        print("\n=== 流程完成 ===")
-        print(f"总耗时: {total_time:.3f}s")
-        print(
-            "各步骤耗时: "
-            f"规范化({step1_time:.3f}s) + 提取({step2_time:.3f}s) + "
-            f"向量({step3_time:.3f}s) + SQL({step4_time:.3f}s) + DB({step5_time:.3f}s)"
+        logger.info("Query debug flow completed in %.3fs", total_time)
+        logger.info(
+            "Step timings: normalization=%.3fs, core_extraction=%.3fs, "
+            "vector_search=%.3fs, sql_generation=%.3fs, database_query=%.3fs",
+            step1_time,
+            step2_time,
+            step3_time,
+            step4_time,
+            step5_time,
         )
-        print("=" * 50)
 
         return {
             "code": 200,

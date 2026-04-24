@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 
 import uvicorn
 from fastapi import FastAPI
@@ -9,6 +10,11 @@ from src.core.config import get_settings
 from src.services.vector_service import VectorService
 
 settings = get_settings()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -44,6 +50,6 @@ app.include_router(router)
 
 
 if __name__ == "__main__":
-    print("启动 FastAPI 服务...")
-    print("接口文档地址: http://127.0.0.1:8000/docs")
+    logger.info("Starting FastAPI service")
+    logger.info("API docs: http://127.0.0.1:8000/docs")
     uvicorn.run(app, host="0.0.0.0", port=8000)

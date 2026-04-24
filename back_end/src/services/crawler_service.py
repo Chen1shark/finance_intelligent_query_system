@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import random
 import re
@@ -11,6 +12,8 @@ from fastapi import HTTPException
 from src.core.config import get_settings
 from src.core.database import get_db_connection
 from src.utils.data_parser import safe_decimal, safe_int
+
+logger = logging.getLogger(__name__)
 
 # Disable proxy variables for the Eastmoney crawler.
 for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
@@ -68,7 +71,7 @@ class CrawlerService:
                         delay = random.uniform(2.0, 4.0)
                         if attempt > 0:
                             delay += random.uniform(2.0, 4.0)
-                        print(f"Fetching page {page}, attempt {attempt + 1}, delay {delay:.2f}s")
+                        logger.info("Fetching page %s, attempt %s, delay %.2fs", page, attempt + 1, delay)
                         time.sleep(delay)
 
                         query_string = urllib.parse.urlencode(params)
@@ -117,11 +120,11 @@ class CrawlerService:
                     except (ConnectionError, ValueError, json.JSONDecodeError) as exc:
                         if attempt == 2:
                             raise HTTPException(status_code=502, detail=f"Option data fetch failed: {exc}") from exc
-                        print(f"Attempt {attempt + 1} failed, retrying: {exc}")
+                        logger.warning("Fetch attempt %s failed, retrying: %s", attempt + 1, exc)
                         time.sleep(random.uniform(1.0, 2.0))
 
                 if not data or not (data.get("data") or {}).get("diff"):
-                    print(f"Page {page} has no data, stop fetching")
+                    logger.info("Page %s has no data, stop fetching", page)
                     break
 
                 for item in data["data"]["diff"]:
